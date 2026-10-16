@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <style>
+        body { width: 340px; max-height: 520px; padding: 16px; font-family: sans-serif; background-color: #111827; color: #f3f4f6; margin: 0; display: flex; flex-direction: column; box-sizing: border-box; }
+        h3 { color: #ec4899; margin: 0 0 8px 0; font-size: 15px; display: flex; align-items: center; gap: 6px; }
+        .btn { width: 100%; background-color: #ec4899; color: #ffffff; border: none; padding: 9px; border-radius: 6px; font-weight: bold; cursor: pointer; transition: background 0.2s; font-size: 13px; }
+        .btn:hover { background-color: #db2777; }
+        .btn-secondary { background-color: #10b981; margin-top: 8px; }
+        .btn-secondary:hover { background-color: #059669; }
+        #status { margin: 8px 0; font-size: 12px; color: #9ca3af; }
+        #listaContainer { display: none; flex-direction: column; gap: 8px; margin-top: 6px; }
+        .acoes-selecao { display: flex; justify-content: space-between; font-size: 11px; color: #ec4899; cursor: pointer; padding: 0 2px; }
+        #candidatosLista { max-height: 240px; overflow-y: auto; background: #1f2937; border: 1px solid #374151; border-radius: 6px; padding: 6px; display: flex; flex-direction: column; gap: 6px; }
+        .candidato-item { display: flex; align-items: flex-start; gap: 8px; padding: 6px; background: #111827; border-radius: 4px; font-size: 12px; }
+        .candidato-item input[type="checkbox"] { margin-top: 2px; accent-color: #ec4899; cursor: pointer; }
+        .candidato-info { display: flex; flex-direction: column; line-height: 1.25; overflow: hidden; }
+        .candidato-nome { font-weight: bold; color: #f3f4f6; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .candidato-cargo { font-size: 11px; color: #9ca3af; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    </style>
+</head>
+<body>
+    <h3>Start RH - Catho Hunter</h3>
+    <p style="font-size: 11px; color: #9ca3af; margin: 0 0 10px 0;">Leia os perfis e envie para a IA avaliar.</p>
+
+    <button id="btnLerTela" class="btn">1. Carregar Candidatos da Tela</button>
+
+    <div id="status">Aguardando leitura...</div>
+
+    <div id="listaContainer">
+        <div class="acoes-selecao">
+            <span id="btnMarcarTodos">Marcar todos</span>
+            <span id="btnDesmarcarTodos">Desmarcar todos</span>
+        </div>
+        <div id="candidatosLista"></div>
+        <button id="btnEnviarSelecionados" class="btn btn-secondary">2. Enviar Selecionados ao Painel</button>
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

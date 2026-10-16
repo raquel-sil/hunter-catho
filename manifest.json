@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Start RH - Catho Hunter",
+  "version": "1.0",
+  "description": "Extração e busca automática de candidatos na Catho Empresas",
+  "permissions": [
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "https://www.catho.com.br/*",
+    "https://*/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  }
+}
