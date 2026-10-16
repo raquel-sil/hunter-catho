@@ -1,2 +1,2 @@
-[tool.vercel]
-entrypoint = "hunter:app"
+#[tool.vercel]
+#entrypoint = "hunter:app"
