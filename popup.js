@@ -1,122 +1,208 @@
-let candidatosDetectados = [];
-const status = document.getElementById('status');
-const listaContainer = document.getElementById('listaContainer');
-const candidatosLista = document.getElementById('candidatosLista');
-const btnLerTela = document.getElementById('btnLerTela');
-const btnEnviar = document.getElementById('btnEnviarSelecionados');
+const API_URL = 'https://hunter-catho.vercel.app/api/receber_candidatos_extensao';
 
-btnLerTela.addEventListener('click', async () => {
-    status.innerText = "A ler candidatos da tela...";
-    candidatosLista.innerHTML = "";
-    listaContainer.style.display = "none";
+let candidatosExtraidos = [];
 
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (!tab || !tab.url.includes("catho.com.br")) {
-        status.innerText = "Erro: Abra a página de busca da Catho primeiro.";
-        return;
-    }
+document.addEventListener('DOMContentLoaded', () => {
+  const btnLerTela = document.getElementById('btnLerTela');
+  const btnEnviarSelecionados = document.getElementById('btnEnviarSelecionados');
+  const listaContainer = document.getElementById('listaContainer');
+  const candidatosLista = document.getElementById('candidatosLista');
+  const statusDiv = document.getElementById('status');
+  const btnMarcarTodos = document.getElementById('btnMarcarTodos');
+  const btnDesmarcarTodos = document.getElementById('btnDesmarcarTodos');
 
-    chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        func: extrairCandidatosDaPagina
-    }, (results) => {
-        if (results && results[0] && results[0].result && results[0].result.length > 0) {
-            candidatosDetectados = results[0].result;
-            status.innerText = `${candidatosDetectados.length} candidato(s) encontrados.`;
-            renderizarLista(candidatosDetectados);
-            listaContainer.style.display = "flex";
-        } else {
-            status.innerText = "Nenhum candidato encontrado nesta página.";
-        }
-    });
-});
-
-function renderizarLista(itens) {
-    candidatosLista.innerHTML = "";
-    itens.forEach((c, index) => {
-        const itemDiv = document.createElement('div');
-        itemDiv.className = 'candidato-item';
-        itemDiv.innerHTML = `
-            <input type="checkbox" id="cand_${index}" data-index="${index}">
-            <label for="cand_${index}" class="candidato-info" style="cursor: pointer;">
-                <span class="candidato-nome">${c.nome}</span>
-                <span class="candidato-cargo">${c.cargo}</span>
-            </label>
-        `;
-        candidatosLista.appendChild(itemDiv);
-    });
-}
-
-document.getElementById('btnMarcarTodos').addEventListener('click', () => {
-    document.querySelectorAll('#candidatosLista input[type="checkbox"]').forEach(cb => cb.checked = true);
-});
-document.getElementById('btnDesmarcarTodos').addEventListener('click', () => {
-    document.querySelectorAll('#candidatosLista input[type="checkbox"]').forEach(cb => cb.checked = false);
-});
-
-btnEnviar.addEventListener('click', async () => {
-    const checkboxes = document.querySelectorAll('#candidatosLista input[type="checkbox"]:checked');
-    const selecionados = Array.from(checkboxes).map(cb => candidatosDetectados[parseInt(cb.getAttribute('data-index'), 10)]);
-
-    if (selecionados.length === 0) {
-        status.innerText = "Selecione pelo menos 1 candidato antes de enviar.";
-        return;
-    }
-
-    status.innerText = `Enviando ${selecionados.length} ao servidor...`;
-    const API_URL = 'https://catho-extension.onrender.com/api/receber_candidatos_extensao';
+  // 1. Ler os candidatos da aba ativa na Catho
+  btnLerTela.addEventListener('click', async () => {
+    statusDiv.textContent = 'Buscando candidatos na página...';
+    statusDiv.style.color = '#9ca3af';
+    candidatosLista.innerHTML = '';
+    listaContainer.style.display = 'none';
 
     try {
-        const response = await fetch(API_URL, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ contatos: selecionados })
-        });
-        if (response.ok) {
-            status.innerText = `Sucesso! ${selecionados.length} candidatos enviados ao painel.`;
-        } else {
-            status.innerText = `Falha ao enviar (Erro ${response.status}).`;
-        }
-    } catch (e) {
-        status.innerText = "Servidor inacessível no Render.";
+      const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+      if (!tab || !tab.id) {
+        statusDiv.textContent = 'Erro: Nenhuma aba ativa encontrada.';
+        statusDiv.style.color = '#ef4444';
+        return;
+      }
+
+      const results = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: extrairDadosCathoDaPagina
+      });
+
+      if (!results || !results[0] || !results[0].result || results[0].result.length === 0) {
+        statusDiv.textContent = 'Nenhum candidato encontrado. Verifique se os currículos estão visíveis na tela.';
+        statusDiv.style.color = '#f59e0b';
+        return;
+      }
+
+      candidatosExtraidos = results[0].result;
+      renderizarLista(candidatosExtraidos);
+
+      listaContainer.style.display = 'flex';
+      statusDiv.textContent = `${candidatosExtraidos.length} candidato(s) carregado(s).`;
+      statusDiv.style.color = '#10b981';
+    } catch (err) {
+      console.error(err);
+      statusDiv.textContent = 'Erro ao ler a página da Catho.';
+      statusDiv.style.color = '#ef4444';
     }
+  });
+
+  // 2. Marcar e Desmarcar todos
+  if (btnMarcarTodos) {
+    btnMarcarTodos.addEventListener('click', () => {
+      document.querySelectorAll('.cand-check').forEach(cb => cb.checked = true);
+    });
+  }
+
+  if (btnDesmarcarTodos) {
+    btnDesmarcarTodos.addEventListener('click', () => {
+      document.querySelectorAll('.cand-check').forEach(cb => cb.checked = false);
+    });
+  }
+
+  // 3. Enviar os candidatos selecionados para a Vercel
+  btnEnviarSelecionados.addEventListener('click', async () => {
+    const checkboxes = document.querySelectorAll('.cand-check:checked');
+    const indices = Array.from(checkboxes).map(cb => parseInt(cb.value, 10));
+
+    if (indices.length === 0) {
+      statusDiv.textContent = 'Selecione pelo menos um candidato na lista.';
+      statusDiv.style.color = '#f59e0b';
+      return;
+    }
+
+    const candidatosParaEnviar = indices.map(idx => candidatosExtraidos[idx]);
+
+    btnEnviarSelecionados.disabled = true;
+    statusDiv.textContent = `Enviando ${candidatosParaEnviar.length} candidato(s)...`;
+    statusDiv.style.color = '#9ca3af';
+
+    try {
+      const response = await fetch(API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json'
+        },
+        body: JSON.stringify({
+          candidatos: candidatosParaEnviar
+        })
+      });
+
+      const resultado = await response.json().catch(() => ({}));
+
+      if (response.ok && resultado.status === 'success') {
+        statusDiv.textContent = `Sucesso! ${candidatosParaEnviar.length} enviado(s) ao painel.`;
+        statusDiv.style.color = '#10b981';
+      } else {
+        throw new Error(resultado.message || `Erro no servidor (${response.status})`);
+      }
+    } catch (err) {
+      console.error(err);
+      statusDiv.textContent = `Falha no envio: ${err.message}`;
+      statusDiv.style.color = '#ef4444';
+    } finally {
+      btnEnviarSelecionados.disabled = false;
+    }
+  });
+
+  function renderizarLista(candidatos) {
+    candidatosLista.innerHTML = '';
+    candidatos.forEach((cand, index) => {
+      const item = document.createElement('div');
+      item.className = 'candidato-item';
+
+      item.innerHTML = `
+        <input type="checkbox" class="cand-check" value="${index}" checked />
+        <div class="candidato-info">
+          <span class="candidato-nome" title="${cand.nome}">${cand.nome}</span>
+          <span class="candidato-cargo" title="${cand.cargo}">${cand.cargo}</span>
+        </div>
+      `;
+      candidatosLista.appendChild(item);
+    });
+  }
 });
 
-function extrairCandidatosDaPagina() {
-    const lista = [];
-    const cards = document.querySelectorAll('article, [class*="ResumeCard"], [class*="curriculo"], [class*="Card"]');
+// Extração cirúrgica dos cartões de currículo da Catho
+function extrairDadosCathoDaPagina() {
+  const lista = [];
 
-    cards.forEach(card => {
-        const nomeEl = card.querySelector('h2, h3, [class*="name"], [class*="nome"]');
-        if (!nomeEl || !nomeEl.innerText.trim()) return;
-        const nome = nomeEl.innerText.trim();
-        const linkEl = card.querySelector('a[href*="curriculo"]') || card.querySelector('a');
-        const link_cv = linkEl ? linkEl.href : window.location.href;
+  // Encontra os blocos que possuem o marcador exclusivo "Experiência:" dos candidatos
+  const todosNos = Array.from(document.querySelectorAll('*'));
+  const nosExperiencia = todosNos.filter(el => {
+    const txt = el.innerText ? el.innerText.trim() : '';
+    return txt.startsWith('Experiência:') && el.children.length <= 2;
+  });
 
-        const todasLinhas = card.innerText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-        const termosIgnorar = ['visualizar currículo', 'ver currículo', 'salvar', 'descartar', 'compartilhar', 'adicionar à vaga', 'mensagem', 'whatsapp', 'ver telefone', 'ações', 'imprimir', 'ver mais'];
-        const linhasUteis = todasLinhas.filter(l => {
-            const lMin = l.toLowerCase();
-            if (l === nome) return false;
-            return !termosIgnorar.some(termo => lMin === termo || lMin.startsWith('ver mais'));
-        });
+  nosExperiencia.forEach((expEl, idx) => {
+    // Sobe na árvore DOM até o contêiner do cartão do candidato
+    let card = expEl.closest('article') || expEl.parentElement;
+    for (let i = 0; i < 6; i++) {
+      if (card && card.innerText && card.innerText.includes('Selecionar')) {
+        break;
+      }
+      if (card && card.parentElement && card.parentElement !== document.body) {
+        card = card.parentElement;
+      }
+    }
 
-        let cargo = 'Não informado';
-        const cargoEl = card.querySelector('h3, h4');
-        if (cargoEl && cargoEl !== nomeEl && cargoEl.innerText.trim().length > 0) {
-            cargo = cargoEl.innerText.trim();
-        } else {
-            const possivelCargo = linhasUteis.find(l => !l.toLowerCase().includes('anos') && !l.toLowerCase().includes('rio de janeiro') && !l.toLowerCase().includes('são paulo') && l.length < 70);
-            if (possivelCargo) cargo = possivelCargo;
+    if (!card) return;
+
+    const textoCompleto = card.innerText || '';
+    const linhas = textoCompleto.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+
+    // O nome aparece logo após a palavra "Selecionar" no card
+    let nome = '';
+    const idxSelecionar = linhas.findIndex(l => l.toLowerCase() === 'selecionar');
+    if (idxSelecionar !== -1 && linhas[idxSelecionar + 1]) {
+      nome = linhas[idxSelecionar + 1];
+    } else {
+      // Fallback: procura títulos que não sejam utilitários
+      const titulos = card.querySelectorAll('h2, h3, a');
+      for (const t of titulos) {
+        const txt = t.innerText ? t.innerText.trim() : '';
+        if (txt.length > 4 && !txt.toLowerCase().includes('selecionar') && !txt.toLowerCase().includes('mensagem')) {
+          nome = txt;
+          break;
         }
+      }
+    }
 
-        const tagEls = Array.from(card.querySelectorAll('[class*="tag"], [class*="chip"], [class*="badge"], [data-testid*="skill"]'))
-            .map(t => t.innerText.trim())
-            .filter(t => t.length > 0 && t.length < 40 && !termosIgnorar.includes(t.toLowerCase()));
-        const competencias = tagEls.length > 0 ? [...new Set(tagEls)].join(', ') : 'Incluído no resumo';
-        const resumo = linhasUteis.length > 0 ? linhasUteis.join(' | ') : 'Sem detalhes adicionais no cartão.';
+    // Linha de idade e localização (ex: "43 anos, Solteiro - Parauapebas...")
+    let cidade = '';
+    const linhaIdade = linhas.find(l => l.includes('anos') || l.includes(' - '));
+    if (linhaIdade) {
+      cidade = linhaIdade;
+    }
 
-        lista.push({ nome, cargo, resumo, competencias, link_cv });
-    });
-    return lista;
+    // Texto da experiência
+    const expTexto = expEl.innerText.trim();
+    const cargo = expTexto.replace(/^Experiência:\s*/i, '').split('\n')[0];
+
+    // Ignora cabeçalhos globais e opções de lote
+    if (nome && !nome.toLowerCase().includes('selecionar todos') && !nome.toLowerCase().includes('encontre o candidato')) {
+      lista.push({
+        id: `catho_${Date.now()}_${idx}`,
+        nome: nome,
+        cargo: cargo || 'Profissional Catho',
+        cidade: cidade || 'Brasil',
+        resumo: textoCompleto.substring(0, 500),
+        status_ia: 'Pendente',
+        data_cadastro: new Date().toISOString()
+      });
+    }
+  });
+
+  // Remove eventuais duplicados pelo nome
+  const vistos = new Set();
+  return lista.filter(item => {
+    if (!item.nome || vistos.has(item.nome)) return false;
+    vistos.add(item.nome);
+    return true;
+  });
 }
