@@ -1,227 +1,327 @@
-import hmac
 import os
-import csv
-import io
-from flask import Flask, Response, render_template_string, request, jsonify
-from dotenv import load_dotenv
-
-load_dotenv()
-
-APP_USER = os.getenv("APP_USER", "admin")
-APP_PASSWORD = os.getenv("APP_PASSWORD", "admin")
+import json
+from functools import wraps
+from flask import Flask, request, jsonify, render_template, render_template_string
+import firebase_admin
+from firebase_admin import credentials, firestore
+import google.generativeai as genai
 
 app = Flask(__name__)
 
-# Armazena temporariamente os candidatos recebidos da extensão
-candidatos_capturados = []
+# --- Configuração de CORS (requisições da extensão Chrome) ---
+@app.after_request
+def aplicar_cors(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS, DELETE'
+    return response
 
-def _pedir_login():
-    return Response(
-        "Acesso restrito.", 401, {"WWW-Authenticate": 'Basic realm="Start RH - Catho Hunter"'}
-    )
+# --- Autenticação Opcional do Painel Web ---
+APP_USER = os.environ.get('APP_USER', 'admin')
+APP_PASSWORD = os.environ.get('APP_PASSWORD', '')
 
-@app.before_request
-def exigir_login():
-    # Liberta a verificação do navegador (OPTIONS) e o recebimento de dados sem pedir senha
-    if request.method == "OPTIONS" or request.endpoint == "api_receber_candidatos_extensao":
-        return
-    if not APP_USER or not APP_PASSWORD:
-        return Response("Servidor sem APP_USER/APP_PASSWORD configurados.", 503)
-    auth = request.authorization
-    if not auth:
-        return _pedir_login()
-    user_ok = hmac.compare_digest(auth.username or "", APP_USER)
-    pass_ok = hmac.compare_digest(auth.password or "", APP_PASSWORD)
-    if not (user_ok and pass_ok):
-        return _pedir_login()
+def check_auth(username, password):
+    return username == APP_USER and password == APP_PASSWORD
 
-HTML_TEMPLATE = """
+def authenticate():
+    return jsonify({"message": "Autenticacao requerida"}), 401, {'WWW-Authenticate': 'Basic realm="Login Required"'}
+
+def requires_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not APP_PASSWORD:
+            return f(*args, **kwargs)
+        auth = request.authorization
+        if not auth or not check_auth(auth.username, auth.password):
+            return authenticate()
+        return f(*args, **kwargs)
+    return decorated
+
+# --- Inicialização do Firebase Firestore com Diagnóstico Detalhado ---
+db = None
+firebase_erro = "Variavel FIREBASE_CONFIG_JSON ausente na Vercel"
+firebase_json = os.environ.get('FIREBASE_CONFIG_JSON')
+
+if firebase_json:
+    try:
+        cred_dict = json.loads(firebase_json)
+        if not firebase_admin._apps:
+            cred = credentials.Certificate(cred_dict)
+            firebase_admin.initialize_app(cred)
+        db = firestore.client()
+        firebase_erro = None
+        print("Firebase inicializado com sucesso.")
+    except Exception as e:
+        firebase_erro = f"Erro na chave: {str(e)}"
+        print(f"Erro ao inicializar Firebase: {e}")
+
+# --- Configuração do Google Gemini ---
+gemini_key = os.environ.get('GEMINI_API_KEY')
+if gemini_key:
+    try:
+        genai.configure(api_key=gemini_key)
+        print("Gemini AI configurado com sucesso.")
+    except Exception as e:
+        print(f"Erro ao configurar Gemini: {e}")
+
+# --- Template HTML do Painel (caso templates/index.html não exista) ---
+DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Start RH - Painel Catho Hunter</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <title>Catho Hunter - Start RH</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f8; margin: 0; padding: 24px; color: #1f2937; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 32px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        h1 { margin-top: 0; color: #111827; font-size: 24px; display: flex; align-items: center; justify-content: space-between; }
+        .vaga-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0; }
+        .vaga-box textarea { width: 100%; height: 70px; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-family: inherit; font-size: 14px; margin-top: 8px; }
+        .actions-bar { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
+        .btn { border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: opacity 0.2s; }
+        .btn:hover { opacity: 0.9; }
+        .btn-ai { background: #7c3aed; color: white; }
+        .btn-refresh { background: #4b5563; color: white; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        th, td { padding: 14px 12px; border-bottom: 1px solid #e5e7eb; text-align: left; font-size: 14px; }
+        th { background: #f9fafb; font-weight: 600; color: #4b5563; }
+        .badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
+        .badge-pendente { background: #fef3c7; color: #92400e; }
+        .badge-aprovado { background: #d1fae5; color: #065f46; }
+        .badge-reprovado { background: #fee2e2; color: #991b1b; }
+        .status-msg { margin-top: 12px; font-size: 14px; }
+    </style>
 </head>
-<body class="bg-gray-900 text-gray-100 min-h-screen flex flex-col items-center p-6">
-    <div class="max-w-5xl w-full bg-gray-800 rounded-xl shadow-2xl border border-gray-700 p-8 mt-6">
-        
-        <div class="flex items-center justify-between border-b border-gray-700 pb-6 mb-6">
-            <div>
-                <h1 class="text-2xl font-bold text-pink-500 flex items-center gap-2">
-                    <i class="fa-solid fa-puzzle-piece"></i> Painel Catho Hunter
-                </h1>
-                <p class="text-sm text-gray-400 mt-1">Sincronização em tempo real de candidatos via Extensão do Navegador.</p>
-            </div>
-            
-            <div class="flex gap-3">
-                <button onclick="carregarCandidatos()" class="bg-gray-700 hover:bg-gray-600 text-white font-bold py-2 px-4 rounded-lg transition text-xs flex items-center gap-2 border border-gray-600">
-                    <i class="fa-solid fa-rotate"></i> Atualizar Lista
-                </button>
-                <a href="/api/exportar_csv" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-lg transition text-xs flex items-center gap-2 shadow-lg">
-                    <i class="fa-solid fa-file-csv"></i> Exportar CSV
-                </a>
-            </div>
+<body>
+    <div class="container">
+        <h1>
+            Start RH • Catho Hunter
+            <span style="font-size: 14px; font-weight: normal; color: #6b7280;">Triagem com Gemini AI</span>
+        </h1>
+
+        <div class="vaga-box">
+            <label for="requisitos" style="font-weight: 600;">Requisitos da Vaga (para triagem com IA):</label>
+            <textarea id="requisitos" placeholder="Ex: Experiencia minima de 2 anos em manutencao eletromecanica, residir proximo, disponibilidade de viagens..."></textarea>
         </div>
 
-        <div class="bg-gray-900/60 p-4 rounded-lg border border-gray-700 mb-6 text-xs text-gray-300">
-            <p class="font-semibold text-pink-400 mb-1"><i class="fa-solid fa-info-circle"></i> Como utilizar:</p>
-            <ol class="list-decimal list-inside space-y-1">
-                <li>Abra o site da Catho Empresas no seu navegador logado.</li>
-                <li>Faça a pesquisa de currículos que desejar.</li>
-                <li>Clique no ícone da extensão <b>Start RH - Catho Hunter</b> e marque os perfis que lhe interessam.</li>
-                <li>Clique em "Enviar Selecionados" e eles aparecerão na tabela abaixo.</li>
-                <li>Por fim, clique em "Exportar CSV" para descarregar a lista.</li>
-            </ol>
+        <div class="actions-bar">
+            <button class="btn btn-refresh" onclick="carregarCandidatos()">Atualizar Lista</button>
+            <button class="btn btn-ai" id="btnIA" onclick="avaliarComIA()">Avaliar Candidatos com IA</button>
         </div>
 
-        <div id="resultadoContainer" class="mt-4">
-            <div class="flex items-center justify-between mb-4">
-                <h2 class="text-lg font-semibold text-gray-200 flex items-center gap-2">
-                    <i class="fa-solid fa-users text-pink-500"></i> Candidatos Sincronizados:
-                </h2>
-                <div class="flex items-center gap-4">
-                    <span id="totalBadge" class="bg-pink-500/10 text-pink-400 text-xs px-3 py-1 rounded-full border border-pink-500/20 font-mono">0 Candidato(s)</span>
-                    <button onclick="limparPainel()" class="text-red-400 hover:text-red-300 text-xs font-semibold flex items-center gap-1 transition">
-                        <i class="fa-solid fa-trash"></i> Limpar Painel
-                    </button>
-                </div>
-            </div>
-            
-            <div id="logList" class="space-y-3 font-sans text-sm">
-                <p class="text-gray-500 text-center py-8">Nenhum candidato capturado ainda. Realize a captura pela extensão na página da Catho.</p>
-            </div>
-        </div>
+        <div id="statusProcessamento" class="status-msg"></div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>Cargo / Resumo</th>
+                    <th>Cidade</th>
+                    <th>Status IA</th>
+                    <th>Parecer da IA</th>
+                </tr>
+            </thead>
+            <tbody id="tabela-corpo">
+                <tr><td colspan="5">Carregando candidatos...</td></tr>
+            </tbody>
+        </table>
     </div>
 
     <script>
         async function carregarCandidatos() {
+            const tbody = document.getElementById('tabela-corpo');
             try {
-                const response = await fetch('/api/listar_candidatos');
-                const data = await response.json();
-                const logList = document.getElementById('logList');
-                const totalBadge = document.getElementById('totalBadge');
+                const res = await fetch('/api/listar_candidatos');
+                const data = await res.json();
+                tbody.innerHTML = '';
+                if (!data.contatos || data.contatos.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#6b7280; padding:32px;">Nenhum candidato recebido. Abra a Catho e envie pela extensao.</td></tr>';
+                    return;
+                }
+                data.contatos.forEach(c => {
+                    const tr = document.createElement('tr');
+                    let badgeClass = 'badge-pendente';
+                    if (c.status_ia === 'Aprovado') badgeClass = 'badge-aprovado';
+                    if (c.status_ia === 'Reprovado') badgeClass = 'badge-reprovado';
 
-                if (data.status === 'success') {
-                    totalBadge.innerText = `${data.contatos.length} Candidato(s)`;
+                    tr.innerHTML = `
+                        <td><strong>${c.nome || '-'}</strong></td>
+                        <td>
+                            <div>${c.cargo || '-'}</div>
+                            <small style="color: #6b7280;">${(c.resumo || '').substring(0, 100)}...</small>
+                        </td>
+                        <td>${c.cidade || '-'}</td>
+                        <td><span class="badge ${badgeClass}">${c.status_ia || 'Pendente'}</span></td>
+                        <td><small>${c.parecer_ia || '-'}</small></td>
+                    `;
+                    tbody.appendChild(tr);
+                });
+            } catch (e) {
+                tbody.innerHTML = '<tr><td colspan="5" style="color:red;">Erro ao buscar candidatos.</td></tr>';
+            }
+        }
 
-                    if (data.contatos.length === 0) {
-                        logList.innerHTML = `<p class="text-gray-500 text-center py-8">Nenhum candidato capturado ainda. Realize a captura pela extensão na página da Catho.</p>`;
-                    } else {
-                        let tableHtml = `
-                            <div class="overflow-x-auto">
-                                <table class="w-full text-left border-collapse border border-gray-700">
-                                    <thead>
-                                        <tr class="bg-gray-900 text-pink-400 border-b border-gray-700 text-xs uppercase font-mono">
-                                            <th class="p-3">Nome</th>
-                                            <th class="p-3">Cargo Visível</th>
-                                            <th class="p-3 text-center">Ação</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody class="divide-y divide-gray-700 bg-gray-800/50">`;
+        async function avaliarComIA() {
+            const requisitos = document.getElementById('requisitos').value.trim();
+            const statusEl = document.getElementById('statusProcessamento');
+            const btn = document.getElementById('btnIA');
 
-                        data.contatos.forEach(c => {
-                            tableHtml += `
-                                <tr class="hover:bg-gray-800 transition">
-                                    <td class="p-3 font-semibold text-gray-100">${c.nome}</td>
-                                    <td class="p-3 text-gray-300">${c.cargo}</td>
-                                    <td class="p-3 text-center">
-                                        <a href="${c.link_cv}" target="_blank" class="inline-flex items-center gap-1 bg-pink-600/20 hover:bg-pink-600/40 text-pink-400 border border-pink-500/30 px-3 py-1 rounded-md text-xs transition">
-                                            <i class="fa-solid fa-arrow-up-right-from-square"></i> Ver Perfil
-                                        </a>
-                                    </td>
-                                </tr>`;
-                        });
+            if (!requisitos) {
+                alert('Preencha os requisitos da vaga antes de executar a avaliacao.');
+                return;
+            }
 
-                        tableHtml += `</tbody></table></div>`;
-                        logList.innerHTML = tableHtml;
-                    }
+            btn.disabled = true;
+            statusEl.style.color = '#7c3aed';
+            statusEl.textContent = 'Processando triagem com Gemini IA... aguarde.';
+
+            try {
+                const res = await fetch('/api/avaliar_ia', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ requisitos: requisitos })
+                });
+                const resultado = await res.json();
+                if (res.ok) {
+                    statusEl.style.color = '#059669';
+                    statusEl.textContent = resultado.message || 'Avaliacao concluida!';
+                    carregarCandidatos();
+                } else {
+                    throw new Error(resultado.message || 'Falha ao processar.');
                 }
             } catch (err) {
-                console.error('Erro ao atualizar lista:', err);
+                statusEl.style.color = '#dc2626';
+                statusEl.textContent = 'Erro na triagem: ' + err.message;
+            } finally {
+                btn.disabled = false;
             }
         }
 
-        async function limparPainel() {
-            if(confirm("Tem a certeza que deseja limpar todos os candidatos do painel?")) {
-                await fetch('/api/limpar_candidatos', { method: 'POST' });
-                carregarCandidatos();
-            }
-        }
-
-        setInterval(carregarCandidatos, 3000);
-        carregarCandidatos();
+        window.onload = carregarCandidatos;
     </script>
 </body>
 </html>
 """
 
-@app.route("/")
+# --- Rota Principal (Dashboard) ---
+@app.route('/')
+@requires_auth
 def index():
-    return render_template_string(HTML_TEMPLATE)
+    if os.path.exists(os.path.join(app.root_path, 'templates', 'index.html')):
+        return render_template('index.html')
+    return render_template_string(DASHBOARD_HTML)
 
-@app.route("/api/receber_candidatos_extensao", methods=["POST", "OPTIONS"])
-def api_receber_candidatos_extensao():
-    if request.method == "OPTIONS":
-        resp = jsonify({"status": "ok"})
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
-        resp.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
-        return resp
+# --- Rota para Listagem de Candidatos ---
+@app.route('/api/listar_candidatos', methods=['GET'])
+def listar_candidatos():
+    if not db:
+        return jsonify({"status": "error", "message": f"Firebase nao conectado: {firebase_erro}"}), 500
+    try:
+        docs = db.collection('candidatos').order_by('data_cadastro', direction=firestore.Query.DESCENDING).stream()
+        candidatos = [doc.to_dict() for doc in docs]
+        return jsonify({"status": "success", "contatos": candidatos}), 200
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
-    global candidatos_capturados
-    data = request.json or {}
-    novos = data.get("contatos", [])
-    
-    links_existentes = {c.get("link_cv") for c in candidatos_capturados}
-    for c in novos:
-        if c.get("link_cv") not in links_existentes:
-            candidatos_capturados.append(c)
-            links_existentes.add(c.get("link_cv"))
+# --- Rota para Receber Candidatos da Extensão ---
+@app.route('/api/receber_candidatos_extensao', methods=['POST', 'OPTIONS'])
+def receber_candidatos_extensao():
+    if request.method == 'OPTIONS':
+        return jsonify({"status": "ok"}), 200
 
-    resp = jsonify({"status": "success", "total": len(candidatos_capturados)})
-    resp.headers["Access-Control-Allow-Origin"] = "*"
-    return resp
+    if not db:
+        return jsonify({"status": "error", "message": f"Firebase nao conectado: {firebase_erro}"}), 500
 
-@app.route("/api/listar_candidatos", methods=["GET"])
-def api_listar_candidatos():
-    return jsonify({"status": "success", "contatos": candidatos_capturados})
+    try:
+        dados = request.get_json(force=True, silent=True)
+        if not dados:
+            return jsonify({"status": "error", "message": "Nenhum dado JSON recebido."}), 400
 
-@app.route("/api/limpar_candidatos", methods=["POST"])
-def api_limpar_candidatos():
-    global candidatos_capturados
-    candidatos_capturados = []
-    return jsonify({"status": "success", "message": "Painel limpo."})
+        # Aceita {'candidatos': [...]} ou lista direta [...]
+        if isinstance(dados, dict):
+            candidatos = dados.get('candidatos', [])
+        elif isinstance(dados, list):
+            candidatos = dados
+        else:
+            return jsonify({"status": "error", "message": "Estrutura JSON incompativel."}), 400
 
-@app.route("/api/exportar_csv", methods=["GET"])
-def api_exportar_csv():
-    global candidatos_capturados
-    si = io.StringIO()
-    
-    # Adicionamos o BOM (Byte Order Mark) para que o Excel em Português leia os acentos corretamente
-    si.write('\ufeff')
-    
-    # Usamos o separador de ponto e vírgula, que é o padrão no Excel para regiões de língua portuguesa
-    cw = csv.writer(si, delimiter=';')
-    cw.writerow(["Nome", "Cargo Visivel", "Resumo das Experiencias", "Competencias", "Link do Curriculo"])
-    
-    for c in candidatos_capturados:
-        cw.writerow([
-            c.get("nome", ""),
-            c.get("cargo", ""),
-            c.get("resumo", "Não especificado"),
-            c.get("competencias", "Não especificadas"),
-            c.get("link_cv", "")
-        ])
-        
-    return Response(
-        si.getvalue(),
-        mimetype="text/csv",
-        headers={"Content-Disposition": "attachment;filename=candidatos_catho.csv"}
-    )
+        if not candidatos:
+            return jsonify({"status": "error", "message": "A lista de candidatos enviada esta vazia."}), 400
 
-if __name__ == "__main__":
-    porta = int(os.getenv("PORT", "5000"))
-    app.run(host="0.0.0.0", port=porta, debug=False)
+        for c in candidatos:
+            cand_id = str(c.get('id') or c.get('nome') or f"catho_{len(candidatos)}")
+            db.collection('candidatos').document(cand_id).set(c, merge=True)
+
+        return jsonify({
+            "status": "success",
+            "message": f"{len(candidatos)} candidatos salvos com sucesso no Firestore."
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+# --- Rota para Triagem de IA via Google Gemini ---
+@app.route('/api/avaliar_ia', methods=['POST'])
+def avaliar_ia():
+    if not db:
+        return jsonify({"status": "error", "message": f"Firebase nao conectado: {firebase_erro}"}), 500
+    if not gemini_key:
+        return jsonify({"status": "error", "message": "GEMINI_API_KEY nao configurada na Vercel."}), 500
+
+    try:
+        payload = request.get_json(force=True, silent=True) or {}
+        requisitos = payload.get('requisitos', '')
+
+        docs = db.collection('candidatos').where('status_ia', '==', 'Pendente').stream()
+        candidatos_pendentes = [(doc.id, doc.to_dict()) for doc in docs]
+
+        if not candidatos_pendentes:
+            return jsonify({"status": "success", "message": "Nenhum candidato pendente para avaliacao."}), 200
+
+        model = genai.GenerativeModel('gemini-1.5-flash')
+
+        avaliados = 0
+        for doc_id, cand in candidatos_pendentes:
+            prompt = f"""
+            Voce e um analista de Recrutamento e Selecao da Start RH.
+            Avalie o perfil abaixo frente aos requisitos da vaga.
+
+            REQUISITOS DA VAGA:
+            {requisitos}
+
+            CANDIDATO:
+            Nome: {cand.get('nome', '')}
+            Cargo: {cand.get('cargo', '')}
+            Cidade: {cand.get('cidade', '')}
+            Resumo: {cand.get('resumo', '')}
+
+            Responda EXCLUSIVAMENTE em formato JSON com duas chaves:
+            "status": "Aprovado" ou "Reprovado",
+            "parecer": "justificativa sucinta em ate 2 frases"
+            """
+
+            try:
+                resposta = model.generate_content(prompt)
+                texto = resposta.text.replace('```json', '').replace('```', '').strip()
+                dados_ia = json.loads(texto)
+
+                db.collection('candidatos').document(doc_id).update({
+                    'status_ia': dados_ia.get('status', 'Avaliado'),
+                    'parecer_ia': dados_ia.get('parecer', '')
+                })
+                avaliados += 1
+            except Exception:
+                continue
+
+        return jsonify({
+            "status": "success",
+            "message": f"{avaliados} candidato(s) avaliado(s) pela IA com sucesso."
+        }), 200
+
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
