@@ -16,7 +16,7 @@ def aplicar_cors(response):
     response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS, DELETE'
     return response
 
-# --- Autenticação Opcional do Painel Web ---
+# --- Autenticação Básica Opcional ---
 APP_USER = os.environ.get('APP_USER', 'admin')
 APP_PASSWORD = os.environ.get('APP_PASSWORD', '')
 
@@ -37,7 +37,7 @@ def requires_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# --- Inicialização do Firebase Firestore com Diagnóstico Detalhado ---
+# --- Inicialização do Firebase Firestore com Diagnóstico ---
 db = None
 firebase_erro = "Variavel FIREBASE_CONFIG_JSON ausente na Vercel"
 firebase_json = os.environ.get('FIREBASE_CONFIG_JSON')
@@ -64,69 +64,235 @@ if gemini_key:
     except Exception as e:
         print(f"Erro ao configurar Gemini: {e}")
 
-# --- Template HTML do Painel (caso templates/index.html não exista) ---
+# --- Dashboard HTML no padrão Dark Theme da Extensão ---
 DASHBOARD_HTML = """
 <!DOCTYPE html>
 <html lang="pt-BR">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Catho Hunter - Start RH</title>
+    <title>Start RH - Catho Hunter</title>
     <style>
         * { box-sizing: border-box; }
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f6f8; margin: 0; padding: 24px; color: #1f2937; }
-        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 32px; border-radius: 12px; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-        h1 { margin-top: 0; color: #111827; font-size: 24px; display: flex; align-items: center; justify-content: space-between; }
-        .vaga-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 16px; margin: 20px 0; }
-        .vaga-box textarea { width: 100%; height: 70px; padding: 10px; border: 1px solid #d1d5db; border-radius: 6px; font-family: inherit; font-size: 14px; margin-top: 8px; }
-        .actions-bar { display: flex; gap: 12px; margin-bottom: 20px; flex-wrap: wrap; }
-        .btn { border: none; padding: 10px 18px; border-radius: 6px; cursor: pointer; font-size: 14px; font-weight: 500; transition: opacity 0.2s; }
-        .btn:hover { opacity: 0.9; }
-        .btn-ai { background: #7c3aed; color: white; }
-        .btn-refresh { background: #4b5563; color: white; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-        th, td { padding: 14px 12px; border-bottom: 1px solid #e5e7eb; text-align: left; font-size: 14px; }
-        th { background: #f9fafb; font-weight: 600; color: #4b5563; }
-        .badge { display: inline-block; padding: 4px 10px; border-radius: 9999px; font-size: 12px; font-weight: 600; }
-        .badge-pendente { background: #fef3c7; color: #92400e; }
-        .badge-aprovado { background: #d1fae5; color: #065f46; }
-        .badge-reprovado { background: #fee2e2; color: #991b1b; }
-        .status-msg { margin-top: 12px; font-size: 14px; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background-color: #111827; 
+            color: #f3f4f6; 
+            margin: 0; 
+            padding: 24px; 
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            background-color: #1f2937; 
+            border: 1px solid #374151; 
+            padding: 28px; 
+            border-radius: 10px; 
+            box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5); 
+        }
+        .header { 
+            display: flex; 
+            align-items: center; 
+            justify-content: space-between; 
+            border-bottom: 1px solid #374151; 
+            padding-bottom: 16px; 
+            margin-bottom: 20px; 
+        }
+        h1 { 
+            margin: 0; 
+            color: #ec4899; 
+            font-size: 22px; 
+            font-weight: 700; 
+            display: flex; 
+            align-items: center; 
+            gap: 8px; 
+        }
+        .subtitle { 
+            font-size: 13px; 
+            color: #9ca3af; 
+            margin: 4px 0 0 0; 
+        }
+        .vaga-box { 
+            background-color: #111827; 
+            border: 1px solid #374151; 
+            border-radius: 8px; 
+            padding: 16px; 
+            margin-bottom: 20px; 
+        }
+        .vaga-box label { 
+            font-weight: 600; 
+            font-size: 13px; 
+            color: #f3f4f6; 
+            display: block; 
+            margin-bottom: 6px; 
+        }
+        .vaga-box textarea { 
+            width: 100%; 
+            height: 75px; 
+            padding: 10px 12px; 
+            border: 1px solid #374151; 
+            border-radius: 6px; 
+            background-color: #1f2937; 
+            color: #f3f4f6; 
+            font-family: inherit; 
+            font-size: 13px; 
+            outline: none; 
+            transition: border-color 0.2s; 
+        }
+        .vaga-box textarea:focus { 
+            border-color: #ec4899; 
+        }
+        .actions-bar { 
+            display: flex; 
+            gap: 12px; 
+            margin-bottom: 16px; 
+            flex-wrap: wrap; 
+        }
+        .btn { 
+            border: none; 
+            padding: 10px 18px; 
+            border-radius: 6px; 
+            cursor: pointer; 
+            font-size: 13px; 
+            font-weight: bold; 
+            transition: background-color 0.2s, opacity 0.2s; 
+            display: inline-flex; 
+            align-items: center; 
+            gap: 6px; 
+        }
+        .btn:hover { 
+            opacity: 0.9; 
+        }
+        .btn-refresh { 
+            background-color: #374151; 
+            color: #f3f4f6; 
+        }
+        .btn-refresh:hover { 
+            background-color: #4b5563; 
+        }
+        .btn-ai { 
+            background-color: #ec4899; 
+            color: #ffffff; 
+        }
+        .btn-ai:hover { 
+            background-color: #db2777; 
+        }
+        .status-msg { 
+            margin-bottom: 14px; 
+            font-size: 13px; 
+            font-weight: 500; 
+        }
+        .table-responsive { 
+            overflow-x: auto; 
+            border-radius: 6px; 
+            border: 1px solid #374151; 
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            background-color: #111827; 
+        }
+        th, td { 
+            padding: 12px 16px; 
+            border-bottom: 1px solid #374151; 
+            text-align: left; 
+            font-size: 13px; 
+        }
+        th { 
+            background-color: #182234; 
+            font-weight: 600; 
+            color: #9ca3af; 
+            text-transform: uppercase; 
+            font-size: 11px; 
+            letter-spacing: 0.05em; 
+        }
+        tr:last-child td { 
+            border-bottom: none; 
+        }
+        tr:hover td { 
+            background-color: #1a2233; 
+        }
+        .cand-nome { 
+            font-weight: bold; 
+            color: #f3f4f6; 
+            font-size: 14px; 
+        }
+        .cand-cargo { 
+            color: #9ca3af; 
+            font-size: 12px; 
+            margin-top: 2px; 
+        }
+        .cand-resumo { 
+            color: #6b7280; 
+            font-size: 11px; 
+            margin-top: 4px; 
+            line-height: 1.4; 
+        }
+        .badge { 
+            display: inline-block; 
+            padding: 3px 9px; 
+            border-radius: 9999px; 
+            font-size: 11px; 
+            font-weight: 600; 
+        }
+        .badge-pendente { 
+            background-color: rgba(245, 158, 11, 0.15); 
+            color: #fbbf24; 
+            border: 1px solid rgba(245, 158, 11, 0.3); 
+        }
+        .badge-aprovado { 
+            background-color: rgba(16, 185, 129, 0.15); 
+            color: #34d399; 
+            border: 1px solid rgba(16, 185, 129, 0.3); 
+        }
+        .badge-reprovado { 
+            background-color: rgba(239, 68, 68, 0.15); 
+            color: #f87171; 
+            border: 1px solid rgba(239, 68, 68, 0.3); 
+        }
+        .parecer-text { 
+            color: #d1d5db; 
+            font-size: 12px; 
+            line-height: 1.4; 
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>
-            Start RH • Catho Hunter
-            <span style="font-size: 14px; font-weight: normal; color: #6b7280;">Triagem com Gemini AI</span>
-        </h1>
+        <div class="header">
+            <div>
+                <h1>Start RH • Catho Hunter</h1>
+                <p class="subtitle">Triagem automatizada de candidatos com Google Gemini</p>
+            </div>
+        </div>
 
         <div class="vaga-box">
-            <label for="requisitos" style="font-weight: 600;">Requisitos da Vaga (para triagem com IA):</label>
-            <textarea id="requisitos" placeholder="Ex: Experiencia minima de 2 anos em manutencao eletromecanica, residir proximo, disponibilidade de viagens..."></textarea>
+            <label for="requisitos">Critérios da Vaga (para avaliação da IA):</label>
+            <textarea id="requisitos" placeholder="Ex: Técnico em Eletromecânica com sólida experiência em manutenção preventiva/corretiva, residir na região de Parauapebas, disponibilidade imediata..."></textarea>
         </div>
 
         <div class="actions-bar">
-            <button class="btn btn-refresh" onclick="carregarCandidatos()">Atualizar Lista</button>
-            <button class="btn btn-ai" id="btnIA" onclick="avaliarComIA()">Avaliar Candidatos com IA</button>
+            <button class="btn btn-refresh" onclick="carregarCandidatos()">🔄 Atualizar Lista</button>
+            <button class="btn btn-ai" id="btnIA" onclick="avaliarComIA()">✨ Avaliar Candidatos com IA</button>
         </div>
 
         <div id="statusProcessamento" class="status-msg"></div>
 
-        <table>
-            <thead>
-                <tr>
-                    <th>Nome</th>
-                    <th>Cargo / Resumo</th>
-                    <th>Cidade</th>
-                    <th>Status IA</th>
-                    <th>Parecer da IA</th>
-                </tr>
-            </thead>
-            <tbody id="tabela-corpo">
-                <tr><td colspan="5">Carregando candidatos...</td></tr>
-            </tbody>
-        </table>
+        <div class="table-responsive">
+            <table>
+                <thead>
+                    <tr>
+                        <th style="width: 25%;">Candidato</th>
+                        <th style="width: 20%;">Localização</th>
+                        <th style="width: 15%;">Status IA</th>
+                        <th style="width: 40%;">Parecer da IA</th>
+                    </tr>
+                </thead>
+                <tbody id="tabela-corpo">
+                    <tr><td colspan="4" style="text-align:center; padding:24px; color:#9ca3af;">Carregando dados...</td></tr>
+                </tbody>
+            </table>
+        </div>
     </div>
 
     <script>
@@ -136,10 +302,12 @@ DASHBOARD_HTML = """
                 const res = await fetch('/api/listar_candidatos');
                 const data = await res.json();
                 tbody.innerHTML = '';
+                
                 if (!data.contatos || data.contatos.length === 0) {
-                    tbody.innerHTML = '<tr><td colspan="5" style="text-align:center; color:#6b7280; padding:32px;">Nenhum candidato recebido. Abra a Catho e envie pela extensao.</td></tr>';
+                    tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#9ca3af; padding:36px;">Nenhum candidato recebido. Abra a listagem da Catho e envie usando a extensão.</td></tr>';
                     return;
                 }
+
                 data.contatos.forEach(c => {
                     const tr = document.createElement('tr');
                     let badgeClass = 'badge-pendente';
@@ -147,19 +315,19 @@ DASHBOARD_HTML = """
                     if (c.status_ia === 'Reprovado') badgeClass = 'badge-reprovado';
 
                     tr.innerHTML = `
-                        <td><strong>${c.nome || '-'}</strong></td>
                         <td>
-                            <div>${c.cargo || '-'}</div>
-                            <small style="color: #6b7280;">${(c.resumo || '').substring(0, 100)}...</small>
+                            <div class="cand-nome">${c.nome || 'Não informado'}</div>
+                            <div class="cand-cargo">${c.cargo || '-'}</div>
+                            <div class="cand-resumo">${(c.resumo || '').substring(0, 110)}...</div>
                         </td>
-                        <td>${c.cidade || '-'}</td>
+                        <td style="color:#9ca3af;">${c.cidade || 'Brasil'}</td>
                         <td><span class="badge ${badgeClass}">${c.status_ia || 'Pendente'}</span></td>
-                        <td><small>${c.parecer_ia || '-'}</small></td>
+                        <td><div class="parecer-text">${c.parecer_ia || 'Aguardando avaliação com IA...'}</div></td>
                     `;
                     tbody.appendChild(tr);
                 });
             } catch (e) {
-                tbody.innerHTML = '<tr><td colspan="5" style="color:red;">Erro ao buscar candidatos.</td></tr>';
+                tbody.innerHTML = '<tr><td colspan="4" style="color:#f87171; text-align:center; padding:20px;">Erro ao carregar candidatos da base de dados.</td></tr>';
             }
         }
 
@@ -169,13 +337,13 @@ DASHBOARD_HTML = """
             const btn = document.getElementById('btnIA');
 
             if (!requisitos) {
-                alert('Preencha os requisitos da vaga antes de executar a avaliacao.');
+                alert('Informe os critérios da vaga antes de executar a triagem.');
                 return;
             }
 
             btn.disabled = true;
-            statusEl.style.color = '#7c3aed';
-            statusEl.textContent = 'Processando triagem com Gemini IA... aguarde.';
+            statusEl.style.color = '#ec4899';
+            statusEl.textContent = 'Avaliando perfis com o Google Gemini... aguarde alguns instantes.';
 
             try {
                 const res = await fetch('/api/avaliar_ia', {
@@ -185,14 +353,14 @@ DASHBOARD_HTML = """
                 });
                 const resultado = await res.json();
                 if (res.ok) {
-                    statusEl.style.color = '#059669';
-                    statusEl.textContent = resultado.message || 'Avaliacao concluida!';
+                    statusEl.style.color = '#34d399';
+                    statusEl.textContent = resultado.message || 'Avaliação concluída!';
                     carregarCandidatos();
                 } else {
                     throw new Error(resultado.message || 'Falha ao processar.');
                 }
             } catch (err) {
-                statusEl.style.color = '#dc2626';
+                statusEl.style.color = '#f87171';
                 statusEl.textContent = 'Erro na triagem: ' + err.message;
             } finally {
                 btn.disabled = false;
@@ -239,7 +407,6 @@ def receber_candidatos_extensao():
         if not dados:
             return jsonify({"status": "error", "message": "Nenhum dado JSON recebido."}), 400
 
-        # Aceita {'candidatos': [...]} ou lista direta [...]
         if isinstance(dados, dict):
             candidatos = dados.get('candidatos', [])
         elif isinstance(dados, list):
